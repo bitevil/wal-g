@@ -11,12 +11,13 @@ const (
 
 var (
 	catchupSendCmd = &cobra.Command{
-		Use:   "catchup-SEND PGDATA host:port",
+		Use:   "catchup-send PGDATA host:port",
 		Short: catchupSendShortDescription,
 		Args:  cobra.ExactArgs(2),
 		Run: func(cmd *cobra.Command, args []string) {
 			postgres.HandleCatchupSend(args[0], args[1])
 		},
+		Annotations: map[string]string{"NoStorage": ""},
 	}
 )
 

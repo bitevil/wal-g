@@ -21,6 +21,7 @@ var catchupReceiveCmd = &cobra.Command{
 		tracelog.ErrorLogger.FatalOnError(err)
 		postgres.HandleCatchupReceive(args[0], port)
 	},
+	Annotations: map[string]string{"NoStorage": ""},
 }
 
 func init() {
