@@ -52,6 +52,8 @@ func HandleCatchupSend(pgDataDirectory string, destination string) {
 	label, offsetMap, _, err := runner.StopBackup()
 	tracelog.ErrorLogger.FatalOnError(err)
 
+	sendFileCommand(dial, encoder, pgDataDirectory, fileList, control.Checkpoint)
+
 	err = encoder.Encode(CatchupCommandDto{Contents: label, FileName: BackupLabelFilename, IsStr: true})
 	tracelog.ErrorLogger.FatalOnError(err)
 	err = encoder.Encode(CatchupCommandDto{Contents: offsetMap, FileName: TablespaceMapFilename, IsStr: true})
@@ -64,6 +66,40 @@ func HandleCatchupSend(pgDataDirectory string, destination string) {
 	err = encoder.Encode(CatchupCommandDto{IsDone: true})
 	tracelog.ErrorLogger.FatalOnError(err)
 	tracelog.InfoLogger.Printf("Send done")
+}
+
+func sendFileCommand(dial net.Conn, encoder *gob.Encoder, directory string, list internal.BackupFileList, checkpoint LSN) {
+	filepath.Walk(directory, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				tracelog.WarningLogger.Println(path, " deleted during filepath walk")
+				return nil
+			}
+			return err
+		}
+		if info.Name() == PgControl {
+			return nil
+		}
+		fileName := info.Name()
+		_, excluded := ExcludedFilenames[fileName]
+		isDir := info.IsDir()
+		if isDir && excluded {
+			return filepath.SkipDir
+		}
+		if excluded {
+			return nil
+		}
+		fullFileName := utility.GetSubdirectoryRelativePath(path, directory)
+
+		if fdto, ok := list[fullFileName]; ok {
+			if fdto.MTime.Equal(info.ModTime()) {
+				// No need to catchup
+				return nil
+			}
+		}
+
+		return nil
+	})
 }
 
 func HandleCatchupReceive(pgDataDirectory string, port int) {
