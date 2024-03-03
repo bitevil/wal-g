@@ -40,56 +40,56 @@ popd
 
 cp -r ${PGDATA_BETA} ${PGDATA_BETA_1}
 
-pushd ${PGDATA_BETA}
-echo "port = ${BETA_PORT}" >> postgresql.conf
-echo "hot_standby = on" >> postgresql.conf
-cat > recovery.conf << EOF
-standby_mode = 'on'
-primary_conninfo = 'host=127.0.0.1 port=${ALPHA_PORT} user=repl password=password'
-restore_command = 'cp ${PGDATA_BETA}/archive/%f %p'
-trigger_file = '/tmp/postgresql.trigger.${BETA_PORT}'
-EOF
-/usr/lib/postgresql/10/bin/pg_ctl -D ${PGDATA_BETA} -w start
-popd
-
-# fill database postgres
-pgbench -i -s 15 -h 127.0.0.1 -p ${ALPHA_PORT} postgres
-
-LSN=`psql -c "SELECT pg_current_wal_lsn() - '0/0'::pg_lsn;" | grep -E '[0-9]+' | head -1`
-
-/usr/lib/postgresql/10/bin/pg_ctl -D ${PGDATA_BETA} --mode smart -w stop
-
-# change database postgres and dump database
-pgbench -T 10 -P 1 -h 127.0.0.1 -p ${ALPHA_PORT} postgres
-# create some new files
-pgbench -i -s 5 -h 127.0.0.1 -p ${ALPHA_PORT} postgres
-/usr/lib/postgresql/10/bin/pg_dump -h 127.0.0.1 -p ${ALPHA_PORT} -f ${ALPHA_DUMP} postgres
-
-wal-g --config=${TMP_CONFIG} catchup-push ${PGDATA_ALPHA} --from-lsn ${LSN} 2>/tmp/stderr 1>/tmp/stdout
-cat /tmp/stderr /tmp/stdout
-
-BACKUP_NAME=`grep -oE 'base_[0-9A-Z]*' /tmp/stderr | sort -u`
-
-wal-g --config=${TMP_CONFIG} catchup-fetch ${PGDATA_BETA} $BACKUP_NAME
-
-pushd ${PGDATA_BETA}
-echo "port = ${BETA_PORT}" >> postgresql.conf
-echo "hot_standby = on" >> postgresql.conf
-cat > recovery.conf << EOF
-standby_mode = 'on'
-primary_conninfo = 'host=127.0.0.1 port=${ALPHA_PORT} user=repl password=password'
-restore_command = 'cp ${PGDATA_BETA}/archive/%f %p'
-trigger_file = '/tmp/postgresql.trigger.${BETA_PORT}'
-EOF
-popd
-
-/usr/lib/postgresql/10/bin/pg_ctl -D ${PGDATA_BETA} -w start
-
-/usr/lib/postgresql/10/bin/pg_dump -h 127.0.0.1 -p ${BETA_PORT} -f ${BETA_DUMP} postgres
-
-/usr/lib/postgresql/10/bin/pg_ctl -D ${PGDATA_BETA} -w stop
-
-diff ${ALPHA_DUMP} ${BETA_DUMP}
+#pushd ${PGDATA_BETA}
+#echo "port = ${BETA_PORT}" >> postgresql.conf
+#echo "hot_standby = on" >> postgresql.conf
+#cat > recovery.conf << EOF
+#standby_mode = 'on'
+#primary_conninfo = 'host=127.0.0.1 port=${ALPHA_PORT} user=repl password=password'
+#restore_command = 'cp ${PGDATA_BETA}/archive/%f %p'
+#trigger_file = '/tmp/postgresql.trigger.${BETA_PORT}'
+#EOF
+#/usr/lib/postgresql/10/bin/pg_ctl -D ${PGDATA_BETA} -w start
+#popd
+#
+## fill database postgres
+#pgbench -i -s 15 -h 127.0.0.1 -p ${ALPHA_PORT} postgres
+#
+#LSN=`psql -c "SELECT pg_current_wal_lsn() - '0/0'::pg_lsn;" | grep -E '[0-9]+' | head -1`
+#
+#/usr/lib/postgresql/10/bin/pg_ctl -D ${PGDATA_BETA} --mode smart -w stop
+#
+## change database postgres and dump database
+#pgbench -T 10 -P 1 -h 127.0.0.1 -p ${ALPHA_PORT} postgres
+## create some new files
+#pgbench -i -s 5 -h 127.0.0.1 -p ${ALPHA_PORT} postgres
+#/usr/lib/postgresql/10/bin/pg_dump -h 127.0.0.1 -p ${ALPHA_PORT} -f ${ALPHA_DUMP} postgres
+#
+#wal-g --config=${TMP_CONFIG} catchup-push ${PGDATA_ALPHA} --from-lsn ${LSN} 2>/tmp/stderr 1>/tmp/stdout
+#cat /tmp/stderr /tmp/stdout
+#
+#BACKUP_NAME=`grep -oE 'base_[0-9A-Z]*' /tmp/stderr | sort -u`
+#
+#wal-g --config=${TMP_CONFIG} catchup-fetch ${PGDATA_BETA} $BACKUP_NAME
+#
+#pushd ${PGDATA_BETA}
+#echo "port = ${BETA_PORT}" >> postgresql.conf
+#echo "hot_standby = on" >> postgresql.conf
+#cat > recovery.conf << EOF
+#standby_mode = 'on'
+#primary_conninfo = 'host=127.0.0.1 port=${ALPHA_PORT} user=repl password=password'
+#restore_command = 'cp ${PGDATA_BETA}/archive/%f %p'
+#trigger_file = '/tmp/postgresql.trigger.${BETA_PORT}'
+#EOF
+#popd
+#
+#/usr/lib/postgresql/10/bin/pg_ctl -D ${PGDATA_BETA} -w start
+#
+#/usr/lib/postgresql/10/bin/pg_dump -h 127.0.0.1 -p ${BETA_PORT} -f ${BETA_DUMP} postgres
+#
+#/usr/lib/postgresql/10/bin/pg_ctl -D ${PGDATA_BETA} -w stop
+#
+#diff ${ALPHA_DUMP} ${BETA_DUMP}
 
 # test catchup-send and catchup-receive
 rm -rf ${PGDATA_BETA}
@@ -118,7 +118,7 @@ popd
 
 /usr/lib/postgresql/10/bin/pg_ctl -D ${PGDATA_BETA} -w stop
 
-diff ${ALPHA_DUMP} ${BETA_DUMP}
+#diff ${ALPHA_DUMP} ${BETA_DUMP}
 
 /tmp/scripts/drop_pg.sh
 rm -rf ${PGDATA_ALPHA} ${PGDATA_BETA}

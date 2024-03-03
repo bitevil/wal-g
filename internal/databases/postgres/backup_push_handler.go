@@ -485,7 +485,7 @@ func NewBackupHandler(arguments BackupArguments) (bh *BackupHandler, err error) 
 	// and version cannot be read easily using replication connection.
 	// Retrieve both with this helper function which uses a temp connection to postgres.
 
-	pgInfo, err := getPgServerInfo()
+	pgInfo, err := GetPgServerInfo()
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +539,7 @@ func (bh *BackupHandler) runRemoteBackup(ctx context.Context) *StreamingBaseBack
 	return baseBackup
 }
 
-func getPgServerInfo() (pgInfo BackupPgInfo, err error) {
+func GetPgServerInfo() (pgInfo BackupPgInfo, err error) {
 	// Creating a temporary connection to read slot info and wal_segment_size
 	tracelog.DebugLogger.Println("Initializing tmp connection to read Postgres info")
 	tmpConn, err := Connect()
