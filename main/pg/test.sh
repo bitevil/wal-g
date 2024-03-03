@@ -12,6 +12,7 @@ $PG/pgbench -i postgres
 $PG/psql -c "checkpoint" postgres
 
 $PG/pg_basebackup --wal-method=stream -D test2
+rm test2/backup_label
 
 $PG/pgbench postgres
 $PG/psql -c "checkpoint" postgres
