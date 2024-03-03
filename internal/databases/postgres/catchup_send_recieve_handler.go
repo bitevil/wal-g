@@ -97,17 +97,38 @@ func sendFileCommands(encoder *gob.Encoder, directory string, list internal.Back
 		}
 		fullFileName := utility.GetSubdirectoryRelativePath(path, directory)
 
+		wasInBase := false
 		if fdto, ok := list[fullFileName]; ok {
 			if fdto.MTime.Equal(info.ModTime()) {
 				// No need to catchup
 				return nil
 			}
+			wasInBase = true
 		}
 
-		fd, err := os.Open(path)
-		tracelog.ErrorLogger.PanicOnError(err)
-		size := info.Size()
-		err = encoder.Encode(CatchupCommandDto{FileName: fullFileName, IsFull: true, FileSize: uint64(size)})
+		increment := isPagedFile(info, path) && wasInBase
+
+		var fd io.ReadCloser
+		var size int64
+		if !increment {
+			fd, err = os.Open(path)
+			tracelog.ErrorLogger.PanicOnError(err)
+			size = info.Size()
+		} else {
+			fd, size, err = ReadIncrementalFile(path, info.Size(), checkpoint, nil)
+
+			if _, ok := err.(*InvalidBlockError); ok {
+				fd, err = os.Open(path)
+				tracelog.ErrorLogger.PanicOnError(err)
+				size = info.Size()
+				increment = false
+			} else {
+				tracelog.ErrorLogger.PanicOnError(err)
+			}
+		}
+
+		//size := info.Size()
+		err = encoder.Encode(CatchupCommandDto{FileName: fullFileName, IsFull: !increment, FileSize: uint64(size), IsIncremental: increment})
 		tracelog.ErrorLogger.PanicOnError(err)
 		reader := io.MultiReader(fd, &ioextensions.ZeroReader{})
 
@@ -155,6 +176,27 @@ func HandleCatchupReceive(pgDataDirectory string, port int) {
 	tracelog.InfoLogger.Printf("Receive done")
 }
 
+type DecoderReader struct {
+	*gob.Decoder
+	buf  []byte
+	size int64
+}
+
+func (d *DecoderReader) Read(bytes []byte) (n int, err error) {
+	if d.size <= 0 {
+		return 0, io.EOF
+	}
+	if len(d.buf) == 0 {
+		err := d.Decode(&d.buf)
+		tracelog.ErrorLogger.PanicOnError(err)
+	}
+	i := copy(bytes, d.buf)
+	i = utility.Min(i, int(d.size))
+	d.buf = d.buf[i:]
+	d.size -= int64(i)
+	return i, err
+}
+
 func doRcvCommand(cmd CatchupCommandDto, directory string, decoder *gob.Decoder) {
 	if cmd.IsBinContents {
 		tracelog.InfoLogger.Printf("Writing file %v", cmd.FileName)
@@ -180,6 +222,15 @@ func doRcvCommand(cmd CatchupCommandDto, directory string, decoder *gob.Decoder)
 		tracelog.ErrorLogger.PanicOnError(err)
 		err = fd.Close()
 		tracelog.ErrorLogger.PanicOnError(err)
+		return
+	}
+
+	if cmd.IsIncremental {
+		tracelog.InfoLogger.Printf("Incremental file %v", cmd.FileName)
+
+		err := ApplyFileIncrement(path.Join(directory, cmd.FileName), &DecoderReader{decoder, nil, int64(cmd.FileSize)}, true, false)
+		tracelog.ErrorLogger.PanicOnError(err)
+		return
 	}
 }
 
