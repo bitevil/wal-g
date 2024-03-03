@@ -13,7 +13,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"time"
 )
 
 func HandleCatchupSend(pgDataDirectory string, destination string) {
@@ -55,7 +54,7 @@ func HandleCatchupSend(pgDataDirectory string, destination string) {
 	label, offsetMap, _, err := runner.StopBackup()
 	tracelog.ErrorLogger.PanicOnError(err)
 
-	sendFileCommand(dial, encoder, pgDataDirectory, fileList, control.Checkpoint)
+	sendFileCommands(encoder, pgDataDirectory, fileList, control.Checkpoint)
 
 	err = encoder.Encode(CatchupCommandDto{BinaryContents: []byte(label), FileName: BackupLabelFilename, IsBinContents: true})
 	tracelog.ErrorLogger.PanicOnError(err)
@@ -71,7 +70,8 @@ func HandleCatchupSend(pgDataDirectory string, destination string) {
 	tracelog.InfoLogger.Printf("Send done")
 }
 
-func sendFileCommand(dial net.Conn, encoder *gob.Encoder, directory string, list internal.BackupFileList, checkpoint LSN) {
+func sendFileCommands(encoder *gob.Encoder, directory string, list internal.BackupFileList, checkpoint LSN) {
+	extendExcludedFiles()
 	filepath.Walk(directory, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -109,21 +109,23 @@ func sendFileCommand(dial net.Conn, encoder *gob.Encoder, directory string, list
 		size := info.Size()
 		err = encoder.Encode(CatchupCommandDto{FileName: fullFileName, IsFull: true, FileSize: uint64(size)})
 		tracelog.ErrorLogger.PanicOnError(err)
-		reader := &io.LimitedReader{
-			R: io.MultiReader(fd, &ioextensions.ZeroReader{}),
-			N: size,
+		reader := io.MultiReader(fd, &ioextensions.ZeroReader{})
+
+		for size != 0 {
+			min := 8192
+			if int64(min) > size {
+				min = int(size)
+			}
+			var bytes = make([]byte, min)
+			io.ReadFull(reader, bytes)
+			size -= int64(len(bytes))
+			encoder.Encode(bytes)
 		}
 
-		n, err := utility.FastCopy(dial, reader)
-		tracelog.InfoLogger.Printf("Sent %v, %v bytes", fullFileName, n)
-		if n != size {
-			tracelog.ErrorLogger.Fatalf("Short write %v instead of %v", n, size)
-		}
+		tracelog.InfoLogger.Printf("Sent %v, %v bytes", fullFileName, info.Size())
 		tracelog.ErrorLogger.PanicOnError(err)
 		err = fd.Close()
 		tracelog.ErrorLogger.PanicOnError(err)
-
-		time.Sleep(time.Second)
 
 		return nil
 	})
@@ -148,12 +150,12 @@ func HandleCatchupReceive(pgDataDirectory string, port int) {
 		if cmd.IsDone {
 			break
 		}
-		doRcvCommand(cmd, pgDataDirectory, conn)
+		doRcvCommand(cmd, pgDataDirectory, decoder)
 	}
 	tracelog.InfoLogger.Printf("Receive done")
 }
 
-func doRcvCommand(cmd CatchupCommandDto, directory string, conn net.Conn) {
+func doRcvCommand(cmd CatchupCommandDto, directory string, decoder *gob.Decoder) {
 	if cmd.IsBinContents {
 		tracelog.InfoLogger.Printf("Writing file %v", cmd.FileName)
 		err := os.WriteFile(path.Join(directory, cmd.FileName), cmd.BinaryContents, 0666)
@@ -166,11 +168,15 @@ func doRcvCommand(cmd CatchupCommandDto, directory string, conn net.Conn) {
 		fd, err := os.Create(path.Join(directory, cmd.FileName))
 		tracelog.ErrorLogger.PanicOnError(err)
 		size := int64(cmd.FileSize)
-		n, err := utility.FastCopy(fd, &io.LimitedReader{R: conn, N: size})
-		if n != size {
-			tracelog.InfoLogger.Printf("Received %v bytes instead of %v", n, size)
+		for size != 0 {
+			var bytes []byte
+			err := decoder.Decode(&bytes)
+			tracelog.ErrorLogger.PanicOnError(err)
+			_, err = fd.Write(bytes)
+			tracelog.ErrorLogger.PanicOnError(err)
+			size -= int64(len(bytes))
 		}
-		tracelog.InfoLogger.Printf("Received %v bytes", n)
+		tracelog.InfoLogger.Printf("Received %v bytes", cmd.FileSize)
 		tracelog.ErrorLogger.PanicOnError(err)
 		err = fd.Close()
 		tracelog.ErrorLogger.PanicOnError(err)
