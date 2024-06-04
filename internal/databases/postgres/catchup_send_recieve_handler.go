@@ -1,18 +1,21 @@
 package postgres
 
 import (
+	"bytes"
 	"encoding/gob"
 	"fmt"
-	"github.com/wal-g/tracelog"
-	"github.com/wal-g/wal-g/internal"
-	"github.com/wal-g/wal-g/internal/ioextensions"
-	"github.com/wal-g/wal-g/utility"
 	"io"
 	"io/fs"
 	"net"
 	"os"
 	"path"
 	"path/filepath"
+
+	"github.com/wal-g/tracelog"
+	"github.com/wal-g/wal-g/internal"
+	"github.com/wal-g/wal-g/internal/compression"
+	"github.com/wal-g/wal-g/internal/ioextensions"
+	"github.com/wal-g/wal-g/utility"
 )
 
 func HandleCatchupSend(pgDataDirectory string, destination string) {
@@ -62,7 +65,15 @@ func HandleCatchupSend(pgDataDirectory string, destination string) {
 	tracelog.ErrorLogger.FatalOnError(err)
 	ourPgControl, err := os.ReadFile(path.Join(pgDataDirectory, PgControlPath))
 	tracelog.ErrorLogger.FatalOnError(err)
-	err = encoder.Encode(CatchupCommandDto{BinaryContents: ourPgControl, FileName: utility.SanitizePath(PgControlPath), IsBinContents: true})
+	ourPgControlIO := bytes.NewReader(ourPgControl)
+	compressor, err := internal.ConfigureCompressor()
+	tracelog.ErrorLogger.FatalOnError(err)
+	ourPgControlSecuredIO := internal.CompressAndEncrypt(ourPgControlIO, compressor, internal.ConfigureCrypter())
+	buf := &bytes.Buffer{}
+	buf.ReadFrom(ourPgControlSecuredIO)
+	ourPgControlSecuredBytes := buf.Bytes()
+	tracelog.ErrorLogger.FatalOnError(err)
+	err = encoder.Encode(CatchupCommandDto{BinaryContents: ourPgControlSecuredBytes, FileName: utility.SanitizePath(PgControlPath), IsBinContents: true})
 	tracelog.ErrorLogger.FatalOnError(err)
 
 	err = encoder.Encode(CatchupCommandDto{IsDone: true})
@@ -203,7 +214,14 @@ func (d *DecoderReader) Read(bytes []byte) (n int, err error) {
 func doRcvCommand(cmd CatchupCommandDto, directory string, decoder *gob.Decoder) {
 	if cmd.IsBinContents {
 		tracelog.InfoLogger.Printf("Writing file %v", cmd.FileName)
-		err := os.WriteFile(path.Join(directory, cmd.FileName), cmd.BinaryContents, 0666)
+		ReadIO := bytes.NewReader(cmd.BinaryContents)
+		Closer := io.NopCloser(ReadIO)
+		ext1 := filepath.Ext(cmd.FileName)
+		decompressedReader, err := internal.DecompressDecryptBytes(Closer, compression.FindDecompressor(ext1))
+		tracelog.ErrorLogger.FatalOnError(err)
+		decompressedBytes, err := io.ReadAll(decompressedReader)
+		tracelog.ErrorLogger.FatalOnError(err)
+		err = os.WriteFile(path.Join(directory, cmd.FileName), decompressedBytes, 0666)
 		tracelog.ErrorLogger.FatalOnError(err)
 		return
 	}
@@ -214,12 +232,19 @@ func doRcvCommand(cmd CatchupCommandDto, directory string, decoder *gob.Decoder)
 		tracelog.ErrorLogger.FatalOnError(err)
 		size := int64(cmd.FileSize)
 		for size != 0 {
-			var bytes []byte
-			err := decoder.Decode(&bytes)
+			var bytesarr []byte
+			err := decoder.Decode(&bytesarr)
 			tracelog.ErrorLogger.FatalOnError(err)
-			_, err = fd.Write(bytes)
+			ReadIO := bytes.NewReader(bytesarr)
+			Closer := io.NopCloser(ReadIO)
+			ext1 := filepath.Ext(cmd.FileName)
+			decompressedReader, err := internal.DecompressDecryptBytes(Closer, compression.FindDecompressor(ext1))
 			tracelog.ErrorLogger.FatalOnError(err)
-			size -= int64(len(bytes))
+			decompressedBytes, err := io.ReadAll(decompressedReader)
+			tracelog.ErrorLogger.FatalOnError(err)
+			_, err = fd.Write(decompressedBytes)
+			tracelog.ErrorLogger.FatalOnError(err)
+			size -= int64(len(bytesarr))
 		}
 		tracelog.InfoLogger.Printf("Received %v bytes", cmd.FileSize)
 		tracelog.ErrorLogger.FatalOnError(err)
